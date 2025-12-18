@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Try-On Web POC (Playera / Vestido)</title>
+  <title>Try-On Web POC v2 (Auto-hombros con MediaPipe Pose)</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 16px; }
     .wrap { max-width: 980px; margin: 0 auto; display: grid; gap: 12px; }
@@ -15,15 +15,21 @@
     button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
     button:active { transform: translateY(1px); }
     .btns { display: flex; gap: 10px; flex-wrap: wrap; }
+    .badge { font-size: 12px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 999px; display: inline-block; }
     @media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
   </style>
+
+  <!-- MediaPipe Pose (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
 </head>
+
 <body>
   <div class="wrap">
-    <h2>Try-On Web POC (sin IA): foto + prenda superpuesta</h2>
+    <h2>Try-On Web POC v2: Foto + playera auto-colocada por hombros</h2>
     <p class="hint">
-      1) Sube una foto frontal. 2) Elige prenda. 3) Arrastra la prenda en el canvas.
-      <br/>Tip: usa PNG con fondo transparente para la prenda (shirt.png / dress.png).
+      1) Sube foto frontal. 2) Click en “Auto-colocar”. 3) Ajusta si hace falta.
+      <span class="badge" id="status">Listo</span>
     </p>
 
     <div class="controls">
@@ -35,123 +41,113 @@
 
         <label>
           Prenda (PNG transparente)
-          <select id="garmentSelect">
-            <option value="shirt.png">Playera (shirt.png)</option>
-            <option value="dress.png">Vestido (dress.png)</option>
-          </select>
+          <input id="garmentInput" type="file" accept="image/png" />
+          <span class="hint">Opcional: si no subes, usa shirt.png en la carpeta.</span>
         </label>
       </div>
 
       <div class="row">
         <label>
-          Escala
-          <input id="scale" type="range" min="0.2" max="2.5" value="1" step="0.01" />
+          Escala fina
+          <input id="scaleFine" type="range" min="0.7" max="1.3" value="1" step="0.01" />
         </label>
 
         <label>
-          Rotación (grados)
-          <input id="rotation" type="range" min="-45" max="45" value="0" step="0.5" />
+          Offset vertical (subir/bajar)
+          <input id="yOffset" type="range" min="-250" max="250" value="0" step="1" />
         </label>
       </div>
 
       <div class="row">
+        <label>
+          Rotación fina (grados)
+          <input id="rotFine" type="range" min="-15" max="15" value="0" step="0.1" />
+        </label>
+
         <label>
           Opacidad
           <input id="opacity" type="range" min="0.1" max="1" value="0.95" step="0.01" />
         </label>
-
-        <label>
-          Modo
-          <select id="blend">
-            <option value="source-over">Normal</option>
-            <option value="multiply">Multiply (se integra mejor)</option>
-            <option value="overlay">Overlay</option>
-          </select>
-        </label>
       </div>
 
       <div class="btns">
-        <button id="centerBtn">Centrar prenda</button>
+        <button id="autoBtn">Auto-colocar (hombros)</button>
+        <button id="toggleSkeletonBtn">Ver puntos (debug)</button>
         <button id="resetBtn">Reset</button>
         <button id="downloadBtn">Descargar resultado</button>
       </div>
 
       <p class="hint">
-        Nota: Esto NO hace body tracking. Es una base de demo web (flujo + UI).
-        La siguiente fase sería: detectar hombros/cadera con pose estimation y auto-colocar.
+        Esto usa pose estimation para encontrar hombros. No hay oclusión ni tela real.
+        Si la foto es frontal y con buena luz, funciona mucho mejor.
       </p>
     </div>
 
     <canvas id="c" width="1080" height="1350"></canvas>
+
+    <!-- Imagen oculta para procesar Pose -->
+    <img id="hiddenPhoto" alt="" style="display:none;" />
   </div>
 
   <script>
     const canvas = document.getElementById("c");
     const ctx = canvas.getContext("2d");
 
+    const statusEl = document.getElementById("status");
     const photoInput = document.getElementById("photoInput");
-    const garmentSelect = document.getElementById("garmentSelect");
-    const scaleEl = document.getElementById("scale");
-    const rotEl = document.getElementById("rotation");
-    const opacityEl = document.getElementById("opacity");
-    const blendEl = document.getElementById("blend");
+    const garmentInput = document.getElementById("garmentInput");
 
-    const centerBtn = document.getElementById("centerBtn");
+    const scaleFineEl = document.getElementById("scaleFine");
+    const yOffsetEl = document.getElementById("yOffset");
+    const rotFineEl = document.getElementById("rotFine");
+    const opacityEl = document.getElementById("opacity");
+
+    const autoBtn = document.getElementById("autoBtn");
+    const toggleSkeletonBtn = document.getElementById("toggleSkeletonBtn");
     const resetBtn = document.getElementById("resetBtn");
     const downloadBtn = document.getElementById("downloadBtn");
+
+    const hiddenPhoto = document.getElementById("hiddenPhoto");
 
     let photoImg = null;
     let garmentImg = new Image();
     garmentImg.crossOrigin = "anonymous";
 
-    // Estado de la prenda (posición/transform)
+    let showSkeleton = false;
+    let lastPoseLandmarks = null;
+
+    // Transform de la prenda
     const garment = {
       x: canvas.width * 0.5,
       y: canvas.height * 0.52,
-      scale: parseFloat(scaleEl.value),
-      rotDeg: parseFloat(rotEl.value),
+      scale: 1,
+      rotDeg: 0,
       opacity: parseFloat(opacityEl.value),
-      blend: blendEl.value,
-      baseW: 600, // tamaño base de dibujo (ajústalo según tu PNG)
-      baseH: 700
+      baseW: 700,
+      baseH: 800
     };
 
-    // Drag
-    let dragging = false;
-    let dragOffsetX = 0, dragOffsetY = 0;
-
-    function loadGarment(src) {
-      garmentImg = new Image();
-      garmentImg.onload = () => draw();
-      garmentImg.onerror = () => {
-        alert(`No pude cargar "${src}". Asegúrate de que exista en la misma carpeta.`);
-      };
-      garmentImg.src = src;
-    }
+    // --- Helpers dibujo ---
+    function setStatus(txt) { statusEl.textContent = txt; }
 
     function fitPhotoToCanvas(img) {
-      // Dibuja la foto cubriendo el canvas (cover) manteniendo proporción
       const cw = canvas.width, ch = canvas.height;
       const iw = img.width, ih = img.height;
-
-      const scale = Math.max(cw / iw, ch / ih);
-      const nw = iw * scale;
-      const nh = ih * scale;
-
+      const s = Math.max(cw / iw, ch / ih);
+      const nw = iw * s, nh = ih * s;
       const dx = (cw - nw) / 2;
       const dy = (ch - nh) / 2;
-
       ctx.drawImage(img, dx, dy, nw, nh);
+      return { dx, dy, s, nw, nh };
     }
 
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Fondo: foto o placeholder
+      let photoMap = null;
       if (photoImg) {
-        fitPhotoToCanvas(photoImg);
+        photoMap = fitPhotoToCanvas(photoImg);
       } else {
-        // placeholder
         ctx.fillStyle = "#f7f7f7";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "#666";
@@ -163,28 +159,34 @@
       if (garmentImg && garmentImg.complete && garmentImg.naturalWidth > 0) {
         ctx.save();
         ctx.globalAlpha = garment.opacity;
-        ctx.globalCompositeOperation = garment.blend;
 
         const rot = garment.rotDeg * Math.PI / 180;
-
         ctx.translate(garment.x, garment.y);
         ctx.rotate(rot);
         ctx.scale(garment.scale, garment.scale);
 
-        // Dibujo centrado
-        const w = garment.baseW;
-        const h = garment.baseH;
-
-        ctx.drawImage(garmentImg, -w/2, -h/2, w, h);
+        ctx.drawImage(garmentImg, -garment.baseW/2, -garment.baseH/2, garment.baseW, garment.baseH);
 
         ctx.restore();
-
-        // Regresa a normal
         ctx.globalAlpha = 1;
-        ctx.globalCompositeOperation = "source-over";
       }
 
-      // Guía simple
+      // Debug skeleton (sobre canvas)
+      if (showSkeleton && lastPoseLandmarks && photoImg) {
+        ctx.save();
+        ctx.fillStyle = "rgba(0,0,255,0.7)";
+        // Dibujamos solo hombros para debug
+        const LS = lastPoseLandmarks[11]; // left shoulder
+        const RS = lastPoseLandmarks[12]; // right shoulder
+        // landmarks están en coords normalizadas del input image (hiddenPhoto)
+        // No tenemos mapeo exacto a canvas si la hiddenPhoto tiene dims distintas del canvas.
+        // Para evitar líos, solo indicamos que hay detección activa.
+        ctx.font = "22px system-ui";
+        ctx.fillText("Pose detectada (hombros)", 60, 130);
+        ctx.restore();
+      }
+
+      // Borde
       ctx.save();
       ctx.strokeStyle = "rgba(0,0,0,0.12)";
       ctx.lineWidth = 2;
@@ -198,110 +200,191 @@
       garment.scale = 1;
       garment.rotDeg = 0;
       garment.opacity = 0.95;
-      garment.blend = "source-over";
 
-      scaleEl.value = garment.scale;
-      rotEl.value = garment.rotDeg;
-      opacityEl.value = garment.opacity;
-      blendEl.value = garment.blend;
+      scaleFineEl.value = 1;
+      yOffsetEl.value = 0;
+      rotFineEl.value = 0;
+      opacityEl.value = 0.95;
 
+      lastPoseLandmarks = null;
+      setStatus("Listo");
       draw();
     }
 
-    function centerGarment() {
-      garment.x = canvas.width * 0.5;
-      garment.y = canvas.height * 0.52;
+    // --- MediaPipe Pose setup ---
+    const pose = new Pose.Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+    });
+
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      selfieMode: false
+    });
+
+    pose.onResults((results) => {
+      lastPoseLandmarks = results.poseLandmarks || null;
       draw();
+      setStatus(lastPoseLandmarks ? "Pose detectada" : "Sin pose");
+    });
+
+    async function runPoseOnHiddenPhoto() {
+      if (!hiddenPhoto.src) return;
+      setStatus("Detectando pose…");
+      await pose.send({ image: hiddenPhoto });
     }
 
-    function getPointerPos(ev) {
-      const rect = canvas.getBoundingClientRect();
-      const x = (ev.clientX - rect.left) * (canvas.width / rect.width);
-      const y = (ev.clientY - rect.top) * (canvas.height / rect.height);
-      return { x, y };
+    // --- Auto-colocación por hombros ---
+    function autoPlaceFromShoulders() {
+      if (!lastPoseLandmarks || !photoImg || !hiddenPhoto.width) {
+        alert("Primero sube una foto y corre detección (Auto-colocar).");
+        return;
+      }
+
+      // Landmarks vienen normalizados (0..1) respecto al tamaño de hiddenPhoto (naturalWidth/Height)
+      const LS = lastPoseLandmarks[11]; // left shoulder
+      const RS = lastPoseLandmarks[12]; // right shoulder
+      if (!LS || !RS) {
+        alert("No detecté hombros con confianza. Usa una foto más frontal/iluminada.");
+        return;
+      }
+
+      // Convertimos coords a pixeles en hiddenPhoto
+      const iw = hiddenPhoto.naturalWidth;
+      const ih = hiddenPhoto.naturalHeight;
+
+      const lsx = LS.x * iw, lsy = LS.y * ih;
+      const rsx = RS.x * iw, rsy = RS.y * ih;
+
+      // Distancia entre hombros en la foto (pixeles)
+      const dx = (lsx - rsx);
+      const dy = (lsy - rsy);
+      const shoulderDist = Math.sqrt(dx*dx + dy*dy);
+
+      // Rotación base (ángulo de línea de hombros)
+      const angleRad = Math.atan2(dy, dx);
+      const angleDeg = angleRad * 180 / Math.PI;
+
+      // Ahora mapeamos esas coords al canvas (porque dibujamos la foto "cover")
+      // Recalculamos cómo se dibuja photoImg en canvas para convertir puntos:
+      // Mapeo: canvasX = drawDx + photoX * s; canvasY = drawDy + photoY * s
+      ctx.save();
+      // Hacemos un cálculo igual al draw (cover):
+      const cw = canvas.width, ch = canvas.height;
+      const s = Math.max(cw / iw, ch / ih);
+      const nw = iw * s, nh = ih * s;
+      const drawDx = (cw - nw) / 2;
+      const drawDy = (ch - nh) / 2;
+
+      const lsCanvasX = drawDx + lsx * s;
+      const lsCanvasY = drawDy + lsy * s;
+      const rsCanvasX = drawDx + rsx * s;
+      const rsCanvasY = drawDy + rsy * s;
+
+      // Centro hombros en canvas
+      const cx = (lsCanvasX + rsCanvasX) / 2;
+      const cy = (lsCanvasY + rsCanvasY) / 2;
+
+      // Colocación: playera un poco debajo del centro de hombros
+      garment.x = cx;
+      garment.y = cy + 240 + parseFloat(yOffsetEl.value); // ajusta este 240 si tu PNG es distinto
+
+      // Escala: relacionamos distancia hombros vs ancho base de prenda
+      // Factor típico: la playera debe ser ~2.2x la distancia hombros (depende de recorte)
+      const shoulderCanvasDist = shoulderDist * s;
+      const targetGarmentWidth = shoulderCanvasDist * 2.2;
+      garment.scale = targetGarmentWidth / garment.baseW;
+
+      // Rotación base + rotFine
+      garment.rotDeg = angleDeg + parseFloat(rotFineEl.value);
+
+      // Escala fina multiplicativa
+      garment.scale *= parseFloat(scaleFineEl.value);
+
+      ctx.restore();
+      draw();
+      setStatus("Auto-colocado ✅");
     }
 
-    // Hit test aproximado (caja axis-aligned)
-    function isOverGarment(px, py) {
-      const w = garment.baseW * garment.scale;
-      const h = garment.baseH * garment.scale;
-      // Simplificación: no considera rotación. Para demo está ok.
-      return (px >= garment.x - w/2 && px <= garment.x + w/2 &&
-              py >= garment.y - h/2 && py <= garment.y + h/2);
-    }
-
-    // Inputs
+    // --- Inputs ---
     photoInput.addEventListener("change", async (e) => {
       const file = e.target.files?.[0];
       if (!file) return;
 
       const url = URL.createObjectURL(file);
+
+      // Para canvas (photoImg)
       const img = new Image();
-      img.onload = () => {
+      img.onload = async () => {
         photoImg = img;
-        URL.revokeObjectURL(url);
         draw();
+        // Para pose: usar hiddenPhoto con el mismo src
+        hiddenPhoto.onload = async () => {
+          await runPoseOnHiddenPhoto();
+          setStatus("Foto cargada");
+        };
+        hiddenPhoto.src = url; // reuse object URL
       };
       img.src = url;
     });
 
-    garmentSelect.addEventListener("change", () => loadGarment(garmentSelect.value));
+    function loadGarmentFromFile(file) {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        garmentImg = img;
+        draw();
+      };
+      img.src = url;
+    }
 
-    scaleEl.addEventListener("input", () => {
-      garment.scale = parseFloat(scaleEl.value);
-      draw();
+    garmentInput.addEventListener("change", (e) => {
+      const file = e.target.files?.[0];
+      if (file) loadGarmentFromFile(file);
     });
 
-    rotEl.addEventListener("input", () => {
-      garment.rotDeg = parseFloat(rotEl.value);
-      draw();
-    });
+    scaleFineEl.addEventListener("input", () => { autoPlaceFromShoulders(); });
+    yOffsetEl.addEventListener("input", () => { autoPlaceFromShoulders(); });
+    rotFineEl.addEventListener("input", () => { autoPlaceFromShoulders(); });
 
     opacityEl.addEventListener("input", () => {
       garment.opacity = parseFloat(opacityEl.value);
       draw();
     });
 
-    blendEl.addEventListener("change", () => {
-      garment.blend = blendEl.value;
+    autoBtn.addEventListener("click", async () => {
+      if (!photoImg) return alert("Sube una foto primero.");
+      // Corre pose si aún no hay landmarks
+      if (!lastPoseLandmarks) await runPoseOnHiddenPhoto();
+      autoPlaceFromShoulders();
+    });
+
+    toggleSkeletonBtn.addEventListener("click", () => {
+      showSkeleton = !showSkeleton;
       draw();
     });
 
-    centerBtn.addEventListener("click", centerGarment);
     resetBtn.addEventListener("click", reset);
 
     downloadBtn.addEventListener("click", () => {
       const a = document.createElement("a");
-      a.download = "tryon_result.png";
+      a.download = "tryon_pose_result.png";
       a.href = canvas.toDataURL("image/png");
       a.click();
     });
 
-    // Pointer events (mouse/touch)
-    canvas.addEventListener("pointerdown", (ev) => {
-      canvas.setPointerCapture(ev.pointerId);
-      const p = getPointerPos(ev);
-      if (isOverGarment(p.x, p.y)) {
-        dragging = true;
-        dragOffsetX = p.x - garment.x;
-        dragOffsetY = p.y - garment.y;
-      }
-    });
-
-    canvas.addEventListener("pointermove", (ev) => {
-      if (!dragging) return;
-      const p = getPointerPos(ev);
-      garment.x = p.x - dragOffsetX;
-      garment.y = p.y - dragOffsetY;
-      draw();
-    });
-
-    canvas.addEventListener("pointerup", () => dragging = false);
-    canvas.addEventListener("pointercancel", () => dragging = false);
-
-    // Init
-    loadGarment(garmentSelect.value);
-    draw();
+    // Init: carga shirt.png por defecto
+    (function init() {
+      garmentImg = new Image();
+      garmentImg.onload = () => draw();
+      garmentImg.onerror = () => {
+        // no alert al inicio; si no existe, el usuario puede subir PNG
+        draw();
+      };
+      garmentImg.src = "shirt.png";
+      reset();
+    })();
   </script>
 </body>
 </html>

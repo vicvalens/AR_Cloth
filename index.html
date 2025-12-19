@@ -3,47 +3,47 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>WebAR POC - Cámara + Playera Overlay</title>
+  <title>WebAR Try-On + Tracking (Pose)</title>
   <style>
-    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background: #000; color:#fff; }
-    .app { height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
-    header { padding: 12px 12px 6px; display:flex; justify-content:space-between; align-items:center; gap:10px; }
-    header h1 { font-size: 16px; margin: 0; font-weight: 650; }
-    header .badge { font-size: 12px; border: 1px solid rgba(255,255,255,0.25); padding: 4px 8px; border-radius: 999px; opacity: 0.9; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#000; color:#fff; }
+    .app { height: 100vh; display:grid; grid-template-rows:auto 1fr auto; }
+    header { padding: 12px; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    header h1 { margin:0; font-size:16px; font-weight:650; }
+    header .badge { font-size:12px; padding:4px 8px; border:1px solid rgba(255,255,255,0.25); border-radius:999px; opacity:0.95; }
 
-    .stage { position: relative; overflow: hidden; }
-    video, canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
-    canvas { touch-action: none; }
+    .stage { position:relative; overflow:hidden; }
+    video, canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+    canvas { touch-action:none; }
 
     .panel {
       padding: 10px 12px 14px;
-      background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.3));
-      display: grid;
-      gap: 10px;
+      background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.25));
+      display:grid; gap:10px;
     }
-    .row { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    label { font-size: 12px; opacity: 0.9; display:grid; gap: 6px; }
-    input[type="range"] { width: 100%; }
-    .btns { display:flex; gap: 10px; flex-wrap: wrap; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    label { font-size:12px; opacity:0.9; display:grid; gap:6px; }
+    input[type="range"] { width:100%; }
+
+    .btns { display:flex; gap:10px; flex-wrap:wrap; }
     button {
-      padding: 10px 12px;
-      border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.25);
+      padding:10px 12px; border-radius:12px;
+      border:1px solid rgba(255,255,255,0.25);
       background: rgba(255,255,255,0.06);
-      color: #fff;
-      cursor: pointer;
-      font-weight: 600;
+      color:#fff; cursor:pointer; font-weight:650;
     }
     button:active { transform: translateY(1px); }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .hint { font-size: 12px; opacity: 0.8; line-height: 1.3; }
+    button:disabled { opacity:0.5; cursor:not-allowed; }
+    .hint { font-size:12px; opacity:0.8; line-height:1.3; }
   </style>
+
+  <!-- MediaPipe Pose (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
 </head>
 
 <body>
 <div class="app">
   <header>
-    <h1>WebAR POC — Cámara + Playera</h1>
+    <h1>WebAR Try-On + Tracking</h1>
     <span class="badge" id="status">Listo</span>
   </header>
 
@@ -55,42 +55,59 @@
   <div class="panel">
     <div class="row">
       <label>
-        Escala
-        <input id="scale" type="range" min="0.3" max="2.2" value="1" step="0.01" />
+        Tracking
+        <select id="mode">
+          <option value="auto">Auto (Pose) si soporta</option>
+          <option value="manual">Manual</option>
+        </select>
       </label>
+
       <label>
-        Rotación (°)
-        <input id="rot" type="range" min="-35" max="35" value="0" step="0.5" />
+        Cámara
+        <select id="cam">
+          <option value="user">Frontal (espejo)</option>
+          <option value="environment">Trasera</option>
+        </select>
       </label>
     </div>
 
     <div class="row">
       <label>
-        Opacidad
-        <input id="opacity" type="range" min="0.1" max="1" value="0.95" step="0.01" />
+        Escala fina
+        <input id="scaleFine" type="range" min="0.7" max="1.3" value="1" step="0.01" />
       </label>
       <label>
-        “Altura” (Y)
-        <input id="y" type="range" min="-300" max="300" value="0" step="1" />
+        Offset vertical (Y)
+        <input id="yOffset" type="range" min="-250" max="250" value="0" step="1" />
+      </label>
+    </div>
+
+    <div class="row">
+      <label>
+        Rotación fina (°)
+        <input id="rotFine" type="range" min="-15" max="15" value="0" step="0.1" />
+      </label>
+      <label>
+        Opacidad
+        <input id="opacity" type="range" min="0.1" max="1" value="0.95" step="0.01" />
       </label>
     </div>
 
     <div class="btns">
       <button id="startBtn">Activar cámara</button>
-      <button id="flipBtn" disabled>Cambiar cámara</button>
       <button id="centerBtn" disabled>Centrar prenda</button>
       <button id="snapBtn" disabled>Snapshot</button>
       <button id="resetBtn">Reset</button>
     </div>
 
-    <div class="hint">
-      Tip: abre desde HTTPS (GitHub Pages). Arrastra la playera con el dedo. Esto es AR básico (overlay), sin tracking automático aún.
+    <div class="hint" id="compatMsg">
+      Tip: en iPhone/iPad el tracking web suele ser inestable; este demo cae a modo manual automáticamente.
     </div>
   </div>
 </div>
 
 <script>
-  // Error overlay para no quedarnos en negro sin explicación
+  // ===== Error overlay =====
   window.addEventListener("error", (e) => {
     const msg = (e && (e.message || (e.error && e.error.message))) || "Unknown error";
     document.body.innerHTML =
@@ -100,67 +117,75 @@
   });
 
   const statusEl = document.getElementById("status");
+  const compatMsg = document.getElementById("compatMsg");
+
   const video = document.getElementById("video");
   const canvas = document.getElementById("canvas");
   const ctx = canvas.getContext("2d");
 
   const startBtn = document.getElementById("startBtn");
-  const flipBtn = document.getElementById("flipBtn");
   const centerBtn = document.getElementById("centerBtn");
   const snapBtn = document.getElementById("snapBtn");
   const resetBtn = document.getElementById("resetBtn");
 
-  const scaleEl = document.getElementById("scale");
-  const rotEl = document.getElementById("rot");
+  const modeEl = document.getElementById("mode");
+  const camEl = document.getElementById("cam");
+
+  const scaleFineEl = document.getElementById("scaleFine");
+  const yOffsetEl = document.getElementById("yOffset");
+  const rotFineEl = document.getElementById("rotFine");
   const opacityEl = document.getElementById("opacity");
-  const yEl = document.getElementById("y");
 
-  function setStatus(t) { statusEl.textContent = t; }
+  function setStatus(t){ statusEl.textContent = t; }
 
-  // Canvas resolution match
+  // ===== iOS/WebKit detection =====
+  const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const isWebKit = /AppleWebKit/i.test(navigator.userAgent);
+  const isIOSWebKit = isIOS && isWebKit;
+
+  // ===== Canvas resize =====
   function resizeCanvasToDisplaySize() {
     const dpr = Math.max(1, window.devicePixelRatio || 1);
     const rect = canvas.getBoundingClientRect();
     const w = Math.round(rect.width * dpr);
     const h = Math.round(rect.height * dpr);
     if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
+      canvas.width = w; canvas.height = h;
     }
   }
 
-  // Load garment PNG
+  // ===== Load garment =====
   const garmentImg = new Image();
-  garmentImg.src = "shirt.png"; // coloca tu PNG aquí
+  garmentImg.src = "shirt.png";
   garmentImg.onload = () => draw();
   garmentImg.onerror = () => setStatus("No cargó shirt.png");
 
-  // Garment state in canvas coords (pixels)
+  // ===== Garment state =====
   const garment = {
     x: 0, y: 0,
-    scale: parseFloat(scaleEl.value),
-    rotDeg: parseFloat(rotEl.value),
+    scale: 1,
+    rotDeg: 0,
     opacity: parseFloat(opacityEl.value),
     baseW: 520, // ajusta según tu PNG
     baseH: 600
   };
 
-  // Manual drag
+  // ===== Manual drag =====
   let dragging = false;
   let dragOffsetX = 0, dragOffsetY = 0;
 
   function getPointerPos(ev) {
     const rect = canvas.getBoundingClientRect();
     const dpr = Math.max(1, window.devicePixelRatio || 1);
-    const x = (ev.clientX - rect.left) * dpr;
-    const y = (ev.clientY - rect.top) * dpr;
-    return { x, y };
+    return {
+      x: (ev.clientX - rect.left) * dpr,
+      y: (ev.clientY - rect.top) * dpr
+    };
   }
 
   function isOverGarment(px, py) {
     const w = garment.baseW * garment.scale;
     const h = garment.baseH * garment.scale;
-    // hit test simple (sin rotación)
     return (px >= garment.x - w/2 && px <= garment.x + w/2 &&
             py >= garment.y - h/2 && py <= garment.y + h/2);
   }
@@ -176,80 +201,70 @@
   });
 
   canvas.addEventListener("pointermove", (ev) => {
-    if (!dragging) return;
+    if (!dragging || modeEl.value === "auto") return; // en auto no dejamos arrastrar (opcional)
     const p = getPointerPos(ev);
     garment.x = p.x - dragOffsetX;
     garment.y = p.y - dragOffsetY;
-    draw();
   });
 
   canvas.addEventListener("pointerup", () => dragging = false);
   canvas.addEventListener("pointercancel", () => dragging = false);
 
-  // Camera
+  // ===== Camera =====
   let stream = null;
-  let usingFront = true;
+  let facingMode = "user"; // or "environment"
+  function usingFront(){ return facingMode === "user"; }
 
   async function startCamera() {
     setStatus("Pidiendo cámara…");
     stopCamera();
+    facingMode = camEl.value;
 
-    const constraints = {
+    stream = await navigator.mediaDevices.getUserMedia({
       audio: false,
       video: {
-        facingMode: usingFront ? "user" : "environment",
+        facingMode,
         width: { ideal: 1280 },
         height: { ideal: 720 }
       }
-    };
+    });
 
-    stream = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = stream;
     await video.play();
 
-    setStatus(usingFront ? "Cámara frontal" : "Cámara trasera");
-    flipBtn.disabled = false;
+    centerGarment();
     centerBtn.disabled = false;
     snapBtn.disabled = false;
-
-    // Center garment when camera starts
-    centerGarment();
-    drawLoop();
+    setStatus(usingFront() ? "Cámara frontal" : "Cámara trasera");
   }
 
   function stopCamera() {
-    if (stream) {
-      stream.getTracks().forEach(t => t.stop());
-      stream = null;
-    }
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null;
   }
 
   function centerGarment() {
     resizeCanvasToDisplaySize();
     garment.x = canvas.width * 0.5;
-    garment.y = canvas.height * 0.52 + parseFloat(yEl.value);
-    draw();
+    garment.y = canvas.height * 0.45 + parseFloat(yOffsetEl.value); // 0.45 suele quedar mejor para torso
   }
 
-  // Drawing
+  // ===== Draw video as background =====
   function drawVideoFrame() {
     resizeCanvasToDisplaySize();
-
-    // draw video into canvas (cover)
     const cw = canvas.width, ch = canvas.height;
     const vw = video.videoWidth || 0;
     const vh = video.videoHeight || 0;
-    if (!vw || !vh) return;
+    if (!vw || !vh) return null;
 
+    // cover
     const s = Math.max(cw / vw, ch / vh);
-    const nw = vw * s;
-    const nh = vh * s;
+    const nw = vw * s, nh = vh * s;
     const dx = (cw - nw) / 2;
     const dy = (ch - nh) / 2;
 
-    // Mirror for front camera so it feels like a mirror
     ctx.save();
-    if (usingFront) {
+    if (usingFront()) {
       ctx.translate(cw, 0);
       ctx.scale(-1, 1);
       ctx.drawImage(video, dx, dy, nw, nh);
@@ -257,6 +272,9 @@
       ctx.drawImage(video, dx, dy, nw, nh);
     }
     ctx.restore();
+
+    // return mapping to convert pose coords (video px) -> canvas px
+    return { s, dx, dy, cw, ch, vw, vh, nw, nh };
   }
 
   function drawGarment() {
@@ -265,21 +283,20 @@
     ctx.save();
     ctx.globalAlpha = garment.opacity;
 
-    // If front camera is mirrored, mirror garment too so it stays aligned visually
-    const cw = canvas.width;
-    if (usingFront) {
+    const rot = garment.rotDeg * Math.PI / 180;
+
+    if (usingFront()) {
+      // mirror garment too, to match mirror video
+      const cw = canvas.width;
       ctx.translate(cw, 0);
       ctx.scale(-1, 1);
-      // Convert x for mirrored space
       const mx = cw - garment.x;
 
-      const rot = garment.rotDeg * Math.PI / 180;
       ctx.translate(mx, garment.y);
       ctx.rotate(rot);
       ctx.scale(garment.scale, garment.scale);
       ctx.drawImage(garmentImg, -garment.baseW/2, -garment.baseH/2, garment.baseW, garment.baseH);
     } else {
-      const rot = garment.rotDeg * Math.PI / 180;
       ctx.translate(garment.x, garment.y);
       ctx.rotate(rot);
       ctx.scale(garment.scale, garment.scale);
@@ -292,7 +309,6 @@
 
   function draw() {
     if (!stream) {
-      // if no camera, show placeholder
       resizeCanvasToDisplaySize();
       ctx.clearRect(0,0,canvas.width,canvas.height);
       ctx.fillStyle = "#111";
@@ -306,17 +322,107 @@
     drawGarment();
   }
 
-  let rafId = null;
-  function drawLoop() {
-    cancelAnimationFrame(rafId);
-    const tick = () => {
-      draw();
-      rafId = requestAnimationFrame(tick);
-    };
-    tick();
+  // ===== Tracking (MediaPipe Pose) =====
+  let pose = null;
+  let lastPose = null;
+
+  function initPoseIfAllowed() {
+    if (isIOSWebKit) {
+      compatMsg.textContent = "iPhone/iPad: tracking en web suele fallar; se fuerza modo MANUAL.";
+      modeEl.value = "manual";
+      return false;
+    }
+    compatMsg.textContent = "Desktop/Android: Tracking Pose disponible. Si baja FPS, cambia a MANUAL.";
+    pose = new Pose.Pose({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
+    });
+    pose.setOptions({
+      modelComplexity: 1,
+      smoothLandmarks: true,
+      enableSegmentation: false,
+      selfieMode: false
+    });
+    pose.onResults((res) => {
+      lastPose = res.poseLandmarks || null;
+    });
+    return true;
   }
 
-  // UI bindings
+  function updateGarmentFromShoulders(map) {
+    if (!lastPose || !map) return;
+
+    // Landmarks indexes
+    const LS = lastPose[11]; // left shoulder
+    const RS = lastPose[12]; // right shoulder
+    if (!LS || !RS) return;
+
+    // Pose landmarks are normalized to the input image (video frame)
+    const lsx = LS.x * map.vw, lsy = LS.y * map.vh;
+    const rsx = RS.x * map.vw, rsy = RS.y * map.vh;
+
+    // In front camera we mirrored the video for display.
+    // The pose is computed on the *unmirrored* video input.
+    // Our drawing is mirrored. Easiest: when front, flip x for placement.
+    const toCanvas = (vx, vy) => {
+      const cx = map.dx + vx * map.s;
+      const cy = map.dy + vy * map.s;
+      // convert into mirrored display coords (what user sees)
+      if (usingFront()) return { x: map.cw - cx, y: cy };
+      return { x: cx, y: cy };
+    };
+
+    const LS_c = toCanvas(lsx, lsy);
+    const RS_c = toCanvas(rsx, rsy);
+
+    const cx = (LS_c.x + RS_c.x) / 2;
+    const cy = (LS_c.y + RS_c.y) / 2;
+
+    const dx = (LS_c.x - RS_c.x);
+    const dy = (LS_c.y - RS_c.y);
+    const shoulderDist = Math.sqrt(dx*dx + dy*dy);
+    const angleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
+
+    garment.x = cx;
+    garment.y = cy + 0.55 * shoulderDist + parseFloat(yOffsetEl.value); // baja al pecho
+
+    const targetW = shoulderDist * 2.2; // tuning
+    garment.scale = (targetW / garment.baseW) * parseFloat(scaleFineEl.value);
+
+    garment.rotDeg = angleDeg + parseFloat(rotFineEl.value);
+  }
+
+  let rafId = null;
+  let lastPoseTime = 0;
+  const POSE_INTERVAL_MS = 80; // ~12.5 fps para pose (mejor rendimiento)
+
+  async function loop(t) {
+    // draw background + garment
+    const map = drawVideoFrame();
+
+    // run pose at limited fps when in auto mode
+    const auto = (modeEl.value === "auto");
+    if (auto && pose && stream) {
+      if (t - lastPoseTime > POSE_INTERVAL_MS) {
+        lastPoseTime = t;
+        // Pose can consume the <video> directly
+        try { await pose.send({ image: video }); } catch(e) { /* fail silently */ }
+      }
+      updateGarmentFromShoulders(map);
+    }
+
+    // draw garment on top
+    drawGarment();
+
+    rafId = requestAnimationFrame(loop);
+  }
+
+  function startLoop() {
+    cancelAnimationFrame(rafId);
+    const tick = (t) => loop(t);
+    rafId = requestAnimationFrame(tick);
+  }
+
+  // ===== UI bindings =====
   startBtn.addEventListener("click", async () => {
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -324,6 +430,7 @@
         return;
       }
       await startCamera();
+      startLoop();
     } catch (err) {
       console.error(err);
       setStatus("Error cámara");
@@ -331,43 +438,58 @@
     }
   });
 
-  flipBtn.addEventListener("click", async () => {
-    usingFront = !usingFront;
+  camEl.addEventListener("change", async () => {
+    if (!stream) return;
     await startCamera();
   });
 
-  centerBtn.addEventListener("click", centerGarment);
-
-  resetBtn.addEventListener("click", () => {
-    scaleEl.value = 1;
-    rotEl.value = 0;
-    opacityEl.value = 0.95;
-    yEl.value = 0;
-
-    garment.scale = 1;
-    garment.rotDeg = 0;
-    garment.opacity = 0.95;
-    centerGarment();
-    setStatus(stream ? (usingFront ? "Cámara frontal" : "Cámara trasera") : "Listo");
+  modeEl.addEventListener("change", () => {
+    if (isIOSWebKit) modeEl.value = "manual";
+    setStatus(modeEl.value === "auto" ? "Auto (tracking)" : "Manual");
   });
 
-  scaleEl.addEventListener("input", () => { garment.scale = parseFloat(scaleEl.value); });
-  rotEl.addEventListener("input", () => { garment.rotDeg = parseFloat(rotEl.value); });
-  opacityEl.addEventListener("input", () => { garment.opacity = parseFloat(opacityEl.value); });
-  yEl.addEventListener("input", () => { centerGarment(); });
+  centerBtn.addEventListener("click", () => {
+    centerGarment();
+    draw();
+  });
+
+  resetBtn.addEventListener("click", () => {
+    scaleFineEl.value = 1;
+    yOffsetEl.value = 0;
+    rotFineEl.value = 0;
+    opacityEl.value = 0.95;
+
+    garment.opacity = 0.95;
+    garment.rotDeg = 0;
+    garment.scale = 1;
+
+    centerGarment();
+    setStatus(stream ? (modeEl.value === "auto" ? "Auto (tracking)" : "Manual") : "Listo");
+  });
+
+  opacityEl.addEventListener("input", () => garment.opacity = parseFloat(opacityEl.value));
 
   snapBtn.addEventListener("click", () => {
-    // Take snapshot of current canvas
     const a = document.createElement("a");
-    a.download = "webar_tryon.png";
+    a.download = "webar_tracking.png";
     a.href = canvas.toDataURL("image/png");
     a.click();
   });
 
-  // Initial placeholder render
-  draw();
+  // ===== Init =====
+  (function init() {
+    draw();
+    const okPose = initPoseIfAllowed();
+    if (!okPose) modeEl.value = "manual";
+    if (isIOSWebKit) {
+      // force manual
+      modeEl.value = "manual";
+    }
+    setStatus(isIOSWebKit ? "Manual (iOS)" : "Listo");
+    // center initially
+    centerGarment();
+  })();
 
-  // Cleanup
   window.addEventListener("beforeunload", () => stopCamera());
 </script>
 </body>

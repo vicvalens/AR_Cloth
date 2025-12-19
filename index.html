@@ -2,474 +2,373 @@
 <html lang="es">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Try-On Web Demo (Fallback iOS + Auto Hombros Desktop)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>WebAR POC - Cámara + Playera Overlay</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 16px; background:#fff; }
-    .wrap { max-width: 980px; margin: 0 auto; display: grid; gap: 12px; }
-    .controls { display: grid; gap: 10px; padding: 12px; border: 1px solid #ddd; border-radius: 12px; }
-    .row { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
-    .row > label { display: grid; gap: 6px; font-size: 14px; }
-    canvas { width: 100%; height: auto; border: 1px solid #ddd; border-radius: 12px; background: #f7f7f7; touch-action: none; }
-    .hint { font-size: 13px; color: #444; margin: 0; }
-    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ccc; background: #fff; cursor: pointer; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background: #000; color:#fff; }
+    .app { height: 100vh; display: grid; grid-template-rows: auto 1fr auto; }
+    header { padding: 12px 12px 6px; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+    header h1 { font-size: 16px; margin: 0; font-weight: 650; }
+    header .badge { font-size: 12px; border: 1px solid rgba(255,255,255,0.25); padding: 4px 8px; border-radius: 999px; opacity: 0.9; }
+
+    .stage { position: relative; overflow: hidden; }
+    video, canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+    canvas { touch-action: none; }
+
+    .panel {
+      padding: 10px 12px 14px;
+      background: linear-gradient(to top, rgba(0,0,0,0.85), rgba(0,0,0,0.3));
+      display: grid;
+      gap: 10px;
+    }
+    .row { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    label { font-size: 12px; opacity: 0.9; display:grid; gap: 6px; }
+    input[type="range"] { width: 100%; }
+    .btns { display:flex; gap: 10px; flex-wrap: wrap; }
+    button {
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.25);
+      background: rgba(255,255,255,0.06);
+      color: #fff;
+      cursor: pointer;
+      font-weight: 600;
+    }
     button:active { transform: translateY(1px); }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .btns { display: flex; gap: 10px; flex-wrap: wrap; }
-    .badge { font-size: 12px; padding: 4px 8px; border: 1px solid #ddd; border-radius: 999px; display: inline-block; }
-    .topline { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-    .small { font-size: 12px; color:#666; }
-    @media (max-width: 720px) { .row { grid-template-columns: 1fr; } }
+    .hint { font-size: 12px; opacity: 0.8; line-height: 1.3; }
   </style>
-
-  <!-- MediaPipe Pose (solo se usa en desktop; en iOS cae a manual) -->
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js"></script>
 </head>
 
 <body>
-  <div class="wrap">
-    <div class="topline">
-      <h2 style="margin:0;">Try-On Web Demo</h2>
-      <span class="badge" id="status">Cargando…</span>
-    </div>
-    <p class="hint" id="compatMsg"></p>
-    <p class="hint small">
-      Demo: foto + prenda superpuesta. En desktop intenta auto-colocar por hombros. En iPhone/iPad usa modo manual (arrastrar).
-    </p>
+<div class="app">
+  <header>
+    <h1>WebAR POC — Cámara + Playera</h1>
+    <span class="badge" id="status">Listo</span>
+  </header>
 
-    <div class="controls">
-      <div class="row">
-        <label>
-          Foto del usuario (JPG/PNG)
-          <input id="photoInput" type="file" accept="image/*" />
-        </label>
-
-        <label>
-          Prenda (PNG transparente)
-          <input id="garmentInput" type="file" accept="image/png" />
-          <span class="small">Si no subes, intenta cargar <b>shirt.png</b> desde el servidor.</span>
-        </label>
-      </div>
-
-      <div class="row">
-        <label>
-          Escala fina
-          <input id="scaleFine" type="range" min="0.7" max="1.3" value="1" step="0.01" />
-        </label>
-
-        <label>
-          Offset vertical (subir/bajar)
-          <input id="yOffset" type="range" min="-250" max="250" value="0" step="1" />
-        </label>
-      </div>
-
-      <div class="row">
-        <label>
-          Rotación fina (grados)
-          <input id="rotFine" type="range" min="-15" max="15" value="0" step="0.1" />
-        </label>
-
-        <label>
-          Opacidad
-          <input id="opacity" type="range" min="0.1" max="1" value="0.95" step="0.01" />
-        </label>
-      </div>
-
-      <div class="btns">
-        <button id="autoBtn">Auto-colocar (hombros)</button>
-        <button id="centerBtn">Centrar prenda</button>
-        <button id="resetBtn">Reset</button>
-        <button id="downloadBtn">Descargar resultado</button>
-      </div>
-
-      <p class="hint small">
-        Tip: foto frontal, buena luz, fondo simple. Para iOS: arrastra la prenda y ajusta con sliders.
-      </p>
-    </div>
-
-    <canvas id="c" width="1080" height="1350"></canvas>
-
-    <!-- imagen oculta para pose -->
-    <img id="hiddenPhoto" alt="" style="display:none;" />
+  <div class="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
   </div>
 
-  <script>
-    // ====== Error overlay (para evitar “pantalla en blanco” sin explicación) ======
-    window.addEventListener("error", (e) => {
-      const msg = (e && (e.message || (e.error && e.error.message))) || "Unknown error";
-      document.body.innerHTML =
-        "<pre style='padding:12px;white-space:pre-wrap;font:14px system-ui;color:#b00020'>" +
-        "JS Error: " + msg +
-        "</pre>";
-    });
+  <div class="panel">
+    <div class="row">
+      <label>
+        Escala
+        <input id="scale" type="range" min="0.3" max="2.2" value="1" step="0.01" />
+      </label>
+      <label>
+        Rotación (°)
+        <input id="rot" type="range" min="-35" max="35" value="0" step="0.5" />
+      </label>
+    </div>
 
-    // ====== DOM refs (con defaults para no romper si falta algo) ======
-    const canvas = document.getElementById("c");
-    const ctx = canvas.getContext("2d");
+    <div class="row">
+      <label>
+        Opacidad
+        <input id="opacity" type="range" min="0.1" max="1" value="0.95" step="0.01" />
+      </label>
+      <label>
+        “Altura” (Y)
+        <input id="y" type="range" min="-300" max="300" value="0" step="1" />
+      </label>
+    </div>
 
-    const statusEl = document.getElementById("status") || { textContent: "" };
-    const compatMsg = document.getElementById("compatMsg") || { textContent: "" };
+    <div class="btns">
+      <button id="startBtn">Activar cámara</button>
+      <button id="flipBtn" disabled>Cambiar cámara</button>
+      <button id="centerBtn" disabled>Centrar prenda</button>
+      <button id="snapBtn" disabled>Snapshot</button>
+      <button id="resetBtn">Reset</button>
+    </div>
 
-    const photoInput = document.getElementById("photoInput");
-    const garmentInput = document.getElementById("garmentInput");
+    <div class="hint">
+      Tip: abre desde HTTPS (GitHub Pages). Arrastra la playera con el dedo. Esto es AR básico (overlay), sin tracking automático aún.
+    </div>
+  </div>
+</div>
 
-    const scaleFineEl = document.getElementById("scaleFine");
-    const yOffsetEl = document.getElementById("yOffset");
-    const rotFineEl = document.getElementById("rotFine");
-    const opacityEl = document.getElementById("opacity");
+<script>
+  // Error overlay para no quedarnos en negro sin explicación
+  window.addEventListener("error", (e) => {
+    const msg = (e && (e.message || (e.error && e.error.message))) || "Unknown error";
+    document.body.innerHTML =
+      "<pre style='padding:12px;white-space:pre-wrap;font:14px system-ui;color:#ffb4b4;background:#200'>" +
+      "JS Error: " + msg +
+      "</pre>";
+  });
 
-    const autoBtn = document.getElementById("autoBtn");
-    const centerBtn = document.getElementById("centerBtn");
-    const resetBtn = document.getElementById("resetBtn");
-    const downloadBtn = document.getElementById("downloadBtn");
+  const statusEl = document.getElementById("status");
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
 
-    const hiddenPhoto = document.getElementById("hiddenPhoto");
+  const startBtn = document.getElementById("startBtn");
+  const flipBtn = document.getElementById("flipBtn");
+  const centerBtn = document.getElementById("centerBtn");
+  const snapBtn = document.getElementById("snapBtn");
+  const resetBtn = document.getElementById("resetBtn");
 
-    function setStatus(t) { statusEl.textContent = t; }
+  const scaleEl = document.getElementById("scale");
+  const rotEl = document.getElementById("rot");
+  const opacityEl = document.getElementById("opacity");
+  const yEl = document.getElementById("y");
 
-    // ====== Detect iOS/WebKit (Chrome iOS también) ======
-    const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-    const isWebKit = /AppleWebKit/i.test(navigator.userAgent);
-    const useManualMode = isIOS && isWebKit; // fallback
+  function setStatus(t) { statusEl.textContent = t; }
 
-    // ====== Images ======
-    let photoImg = null;
-    let garmentImg = new Image();
-    garmentImg.crossOrigin = "anonymous";
+  // Canvas resolution match
+  function resizeCanvasToDisplaySize() {
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const rect = canvas.getBoundingClientRect();
+    const w = Math.round(rect.width * dpr);
+    const h = Math.round(rect.height * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+    }
+  }
 
-    // ====== Garment transform state ======
-    const garment = {
-      x: canvas.width * 0.5,
-      y: canvas.height * 0.52,
-      scale: 1,
-      rotDeg: 0,
-      opacity: parseFloat(opacityEl.value || "0.95"),
-      baseW: 700,
-      baseH: 800
+  // Load garment PNG
+  const garmentImg = new Image();
+  garmentImg.src = "shirt.png"; // coloca tu PNG aquí
+  garmentImg.onload = () => draw();
+  garmentImg.onerror = () => setStatus("No cargó shirt.png");
+
+  // Garment state in canvas coords (pixels)
+  const garment = {
+    x: 0, y: 0,
+    scale: parseFloat(scaleEl.value),
+    rotDeg: parseFloat(rotEl.value),
+    opacity: parseFloat(opacityEl.value),
+    baseW: 520, // ajusta según tu PNG
+    baseH: 600
+  };
+
+  // Manual drag
+  let dragging = false;
+  let dragOffsetX = 0, dragOffsetY = 0;
+
+  function getPointerPos(ev) {
+    const rect = canvas.getBoundingClientRect();
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const x = (ev.clientX - rect.left) * dpr;
+    const y = (ev.clientY - rect.top) * dpr;
+    return { x, y };
+  }
+
+  function isOverGarment(px, py) {
+    const w = garment.baseW * garment.scale;
+    const h = garment.baseH * garment.scale;
+    // hit test simple (sin rotación)
+    return (px >= garment.x - w/2 && px <= garment.x + w/2 &&
+            py >= garment.y - h/2 && py <= garment.y + h/2);
+  }
+
+  canvas.addEventListener("pointerdown", (ev) => {
+    canvas.setPointerCapture(ev.pointerId);
+    const p = getPointerPos(ev);
+    if (isOverGarment(p.x, p.y)) {
+      dragging = true;
+      dragOffsetX = p.x - garment.x;
+      dragOffsetY = p.y - garment.y;
+    }
+  });
+
+  canvas.addEventListener("pointermove", (ev) => {
+    if (!dragging) return;
+    const p = getPointerPos(ev);
+    garment.x = p.x - dragOffsetX;
+    garment.y = p.y - dragOffsetY;
+    draw();
+  });
+
+  canvas.addEventListener("pointerup", () => dragging = false);
+  canvas.addEventListener("pointercancel", () => dragging = false);
+
+  // Camera
+  let stream = null;
+  let usingFront = true;
+
+  async function startCamera() {
+    setStatus("Pidiendo cámara…");
+    stopCamera();
+
+    const constraints = {
+      audio: false,
+      video: {
+        facingMode: usingFront ? "user" : "environment",
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
     };
 
-    // ====== Manual drag ======
-    let dragging = false;
-    let dragOffsetX = 0, dragOffsetY = 0;
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = stream;
+    await video.play();
 
-    function fitPhotoToCanvas(img) {
-      // "cover" scaling
-      const cw = canvas.width, ch = canvas.height;
-      const iw = img.width, ih = img.height;
-      const s = Math.max(cw / iw, ch / ih);
-      const nw = iw * s, nh = ih * s;
-      const dx = (cw - nw) / 2;
-      const dy = (ch - nh) / 2;
-      ctx.drawImage(img, dx, dy, nw, nh);
-      return { dx, dy, s, iw, ih };
+    setStatus(usingFront ? "Cámara frontal" : "Cámara trasera");
+    flipBtn.disabled = false;
+    centerBtn.disabled = false;
+    snapBtn.disabled = false;
+
+    // Center garment when camera starts
+    centerGarment();
+    drawLoop();
+  }
+
+  function stopCamera() {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+  }
+
+  function centerGarment() {
+    resizeCanvasToDisplaySize();
+    garment.x = canvas.width * 0.5;
+    garment.y = canvas.height * 0.52 + parseFloat(yEl.value);
+    draw();
+  }
+
+  // Drawing
+  function drawVideoFrame() {
+    resizeCanvasToDisplaySize();
+
+    // draw video into canvas (cover)
+    const cw = canvas.width, ch = canvas.height;
+    const vw = video.videoWidth || 0;
+    const vh = video.videoHeight || 0;
+    if (!vw || !vh) return;
+
+    const s = Math.max(cw / vw, ch / vh);
+    const nw = vw * s;
+    const nh = vh * s;
+    const dx = (cw - nw) / 2;
+    const dy = (ch - nh) / 2;
+
+    // Mirror for front camera so it feels like a mirror
+    ctx.save();
+    if (usingFront) {
+      ctx.translate(cw, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, dx, dy, nw, nh);
+    } else {
+      ctx.drawImage(video, dx, dy, nw, nh);
+    }
+    ctx.restore();
+  }
+
+  function drawGarment() {
+    if (!garmentImg.complete || garmentImg.naturalWidth === 0) return;
+
+    ctx.save();
+    ctx.globalAlpha = garment.opacity;
+
+    // If front camera is mirrored, mirror garment too so it stays aligned visually
+    const cw = canvas.width;
+    if (usingFront) {
+      ctx.translate(cw, 0);
+      ctx.scale(-1, 1);
+      // Convert x for mirrored space
+      const mx = cw - garment.x;
+
+      const rot = garment.rotDeg * Math.PI / 180;
+      ctx.translate(mx, garment.y);
+      ctx.rotate(rot);
+      ctx.scale(garment.scale, garment.scale);
+      ctx.drawImage(garmentImg, -garment.baseW/2, -garment.baseH/2, garment.baseW, garment.baseH);
+    } else {
+      const rot = garment.rotDeg * Math.PI / 180;
+      ctx.translate(garment.x, garment.y);
+      ctx.rotate(rot);
+      ctx.scale(garment.scale, garment.scale);
+      ctx.drawImage(garmentImg, -garment.baseW/2, -garment.baseH/2, garment.baseW, garment.baseH);
     }
 
-    function draw() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }
 
-      if (photoImg) {
-        fitPhotoToCanvas(photoImg);
-      } else {
-        ctx.fillStyle = "#f7f7f7";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.fillStyle = "#666";
-        ctx.font = "28px system-ui";
-        ctx.fillText("Sube una foto para empezar", 60, 90);
-      }
-
-      if (garmentImg && garmentImg.complete && garmentImg.naturalWidth > 0) {
-        ctx.save();
-        ctx.globalAlpha = garment.opacity;
-
-        const rot = garment.rotDeg * Math.PI / 180;
-        ctx.translate(garment.x, garment.y);
-        ctx.rotate(rot);
-        ctx.scale(garment.scale, garment.scale);
-
-        ctx.drawImage(
-          garmentImg,
-          -garment.baseW / 2,
-          -garment.baseH / 2,
-          garment.baseW,
-          garment.baseH
-        );
-
-        ctx.restore();
-        ctx.globalAlpha = 1;
-      } else {
-        // si no hay prenda, muestra hint
-        ctx.save();
-        ctx.fillStyle = "rgba(0,0,0,0.55)";
-        ctx.font = "22px system-ui";
-        ctx.fillText("No se cargó la prenda. Sube un PNG o agrega shirt.png.", 60, 130);
-        ctx.restore();
-      }
-
-      // border
-      ctx.save();
-      ctx.strokeStyle = "rgba(0,0,0,0.12)";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2);
-      ctx.restore();
+  function draw() {
+    if (!stream) {
+      // if no camera, show placeholder
+      resizeCanvasToDisplaySize();
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle = "#111";
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.font = "24px system-ui";
+      ctx.fillText("Pulsa “Activar cámara”", 40, 70);
+      return;
     }
+    drawVideoFrame();
+    drawGarment();
+  }
 
-    function centerGarment() {
-      garment.x = canvas.width * 0.5;
-      garment.y = canvas.height * 0.52 + parseFloat(yOffsetEl.value || "0");
+  let rafId = null;
+  function drawLoop() {
+    cancelAnimationFrame(rafId);
+    const tick = () => {
       draw();
-    }
+      rafId = requestAnimationFrame(tick);
+    };
+    tick();
+  }
 
-    function resetAll() {
-      garment.x = canvas.width * 0.5;
-      garment.y = canvas.height * 0.52;
-      garment.scale = 1;
-      garment.rotDeg = 0;
-      garment.opacity = 0.95;
-
-      if (scaleFineEl) scaleFineEl.value = 1;
-      if (yOffsetEl) yOffsetEl.value = 0;
-      if (rotFineEl) rotFineEl.value = 0;
-      if (opacityEl) opacityEl.value = 0.95;
-
-      setStatus(useManualMode ? "Modo manual (iOS)" : "Listo");
-      draw();
-    }
-
-    // ====== Pointer helpers ======
-    function getPointerPos(ev) {
-      const rect = canvas.getBoundingClientRect();
-      const x = (ev.clientX - rect.left) * (canvas.width / rect.width);
-      const y = (ev.clientY - rect.top) * (canvas.height / rect.height);
-      return { x, y };
-    }
-
-    function isOverGarment(px, py) {
-      const w = garment.baseW * garment.scale;
-      const h = garment.baseH * garment.scale;
-      // simple box hit test (no rot)
-      return (px >= garment.x - w/2 && px <= garment.x + w/2 &&
-              py >= garment.y - h/2 && py <= garment.y + h/2);
-    }
-
-    canvas.addEventListener("pointerdown", (ev) => {
-      canvas.setPointerCapture(ev.pointerId);
-      const p = getPointerPos(ev);
-      if (isOverGarment(p.x, p.y)) {
-        dragging = true;
-        dragOffsetX = p.x - garment.x;
-        dragOffsetY = p.y - garment.y;
-      }
-    });
-
-    canvas.addEventListener("pointermove", (ev) => {
-      if (!dragging) return;
-      const p = getPointerPos(ev);
-      garment.x = p.x - dragOffsetX;
-      garment.y = p.y - dragOffsetY;
-      draw();
-    });
-
-    canvas.addEventListener("pointerup", () => dragging = false);
-    canvas.addEventListener("pointercancel", () => dragging = false);
-
-    // ====== Sliders (siempre) ======
-    if (opacityEl) {
-      opacityEl.addEventListener("input", () => {
-        garment.opacity = parseFloat(opacityEl.value);
-        draw();
-      });
-    }
-    if (scaleFineEl) {
-      scaleFineEl.addEventListener("input", () => {
-        // en manual: escala directa; en desktop auto: se aplica al auto
-        if (useManualMode) {
-          garment.scale = garment.scale * 0.0 + parseFloat(scaleFineEl.value); // escala "absoluta" (simple)
-          // OJO: esto pone escala ~1.0 por default; si quieres, cámbialo por multiplicativa
-        }
-        draw();
-      });
-    }
-    if (rotFineEl) {
-      rotFineEl.addEventListener("input", () => {
-        if (useManualMode) garment.rotDeg = parseFloat(rotFineEl.value);
-        draw();
-      });
-    }
-    if (yOffsetEl) {
-      yOffsetEl.addEventListener("input", () => {
-        if (useManualMode) garment.y = canvas.height * 0.52 + parseFloat(yOffsetEl.value);
-        draw();
-      });
-    }
-
-    // ====== File inputs ======
-    photoInput.addEventListener("change", (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-
-      const url = URL.createObjectURL(file);
-
-      const img = new Image();
-      img.onload = () => {
-        photoImg = img;
-        draw();
-        // hiddenPhoto for pose (desktop)
-        hiddenPhoto.onload = async () => {
-          if (!useManualMode) {
-            setStatus("Foto lista (desktop)");
-          } else {
-            setStatus("Foto lista (iOS)");
-          }
-        };
-        hiddenPhoto.src = url;
-      };
-      img.src = url;
-    });
-
-    garmentInput.addEventListener("change", (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => {
-        garmentImg = img;
-        draw();
-      };
-      img.src = url;
-    });
-
-    // ====== Download ======
-    downloadBtn.addEventListener("click", () => {
-      const a = document.createElement("a");
-      a.download = "tryon_result.png";
-      a.href = canvas.toDataURL("image/png");
-      a.click();
-    });
-
-    resetBtn.addEventListener("click", resetAll);
-    centerBtn.addEventListener("click", centerGarment);
-
-    // ====== Desktop auto-place via MediaPipe Pose ======
-    let pose = null;
-    let lastPoseLandmarks = null;
-
-    function autoPlaceFromShoulders() {
-      if (!lastPoseLandmarks || !photoImg || !hiddenPhoto.naturalWidth) {
-        alert("Sube una foto primero (y espera a que cargue).");
+  // UI bindings
+  startBtn.addEventListener("click", async () => {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        alert("Este navegador no soporta getUserMedia.");
         return;
       }
-
-      const LS = lastPoseLandmarks[11];
-      const RS = lastPoseLandmarks[12];
-      if (!LS || !RS) {
-        alert("No detecté hombros con confianza. Usa una foto más frontal/iluminada.");
-        return;
-      }
-
-      const iw = hiddenPhoto.naturalWidth;
-      const ih = hiddenPhoto.naturalHeight;
-
-      const lsx = LS.x * iw, lsy = LS.y * ih;
-      const rsx = RS.x * iw, rsy = RS.y * ih;
-
-      const dx = (lsx - rsx);
-      const dy = (lsy - rsy);
-      const shoulderDist = Math.sqrt(dx*dx + dy*dy);
-
-      const angleDeg = Math.atan2(dy, dx) * 180 / Math.PI;
-
-      // map to canvas (same "cover" math)
-      const cw = canvas.width, ch = canvas.height;
-      const s = Math.max(cw / iw, ch / ih);
-      const nw = iw * s, nh = ih * s;
-      const drawDx = (cw - nw) / 2;
-      const drawDy = (ch - nh) / 2;
-
-      const lsCanvasX = drawDx + lsx * s;
-      const lsCanvasY = drawDy + lsy * s;
-      const rsCanvasX = drawDx + rsx * s;
-      const rsCanvasY = drawDy + rsy * s;
-
-      const cx = (lsCanvasX + rsCanvasX) / 2;
-      const cy = (lsCanvasY + rsCanvasY) / 2;
-
-      garment.x = cx;
-      garment.y = cy + 240 + parseFloat(yOffsetEl.value || "0");
-
-      const shoulderCanvasDist = shoulderDist * s;
-      const targetW = shoulderCanvasDist * 2.2;
-
-      const fineScale = parseFloat(scaleFineEl.value || "1");
-      garment.scale = (targetW / garment.baseW) * fineScale;
-
-      garment.rotDeg = angleDeg + parseFloat(rotFineEl.value || "0");
-
-      draw();
-      setStatus("Auto-colocado ✅");
+      await startCamera();
+    } catch (err) {
+      console.error(err);
+      setStatus("Error cámara");
+      alert("No pude acceder a la cámara. Verifica permisos y que sea HTTPS.");
     }
+  });
 
-    async function runPoseOnce() {
-      if (!pose) return;
-      if (!hiddenPhoto.src) {
-        alert("Sube una foto primero.");
-        return;
-      }
-      setStatus("Detectando pose…");
-      await pose.send({ image: hiddenPhoto });
-    }
+  flipBtn.addEventListener("click", async () => {
+    usingFront = !usingFront;
+    await startCamera();
+  });
 
-    autoBtn.addEventListener("click", async () => {
-      if (useManualMode) return;
-      await runPoseOnce();
-      autoPlaceFromShoulders();
-    });
+  centerBtn.addEventListener("click", centerGarment);
 
-    // ====== Init ======
-    (async function init() {
-      // message + mode
-      if (useManualMode) {
-        compatMsg.textContent = "✅ iPhone/iPad: modo manual (arrastrar + sliders). Auto-colocar está desactivado por compatibilidad WebKit.";
-        autoBtn.disabled = true;
-        autoBtn.textContent = "Auto-colocar (desktop)";
-        setStatus("Modo manual (iOS)");
-      } else {
-        compatMsg.textContent = "✅ Desktop: Auto-colocar por hombros disponible (MediaPipe Pose).";
-        setStatus("Listo (desktop)");
-        // init MediaPipe Pose
-        pose = new Pose.Pose({
-          locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
-        });
-        pose.setOptions({
-          modelComplexity: 1,
-          smoothLandmarks: true,
-          enableSegmentation: false,
-          selfieMode: false
-        });
-        pose.onResults((results) => {
-          lastPoseLandmarks = results.poseLandmarks || null;
-          setStatus(lastPoseLandmarks ? "Pose detectada" : "Sin pose");
-        });
+  resetBtn.addEventListener("click", () => {
+    scaleEl.value = 1;
+    rotEl.value = 0;
+    opacityEl.value = 0.95;
+    yEl.value = 0;
 
-        // En desktop, si mueves sliders, re-auto-coloca si ya hay pose
-        for (const el of [scaleFineEl, yOffsetEl, rotFineEl]) {
-          if (!el) continue;
-          el.addEventListener("input", () => {
-            if (lastPoseLandmarks) autoPlaceFromShoulders();
-          });
-        }
-      }
+    garment.scale = 1;
+    garment.rotDeg = 0;
+    garment.opacity = 0.95;
+    centerGarment();
+    setStatus(stream ? (usingFront ? "Cámara frontal" : "Cámara trasera") : "Listo");
+  });
 
-      // load default shirt.png
-      garmentImg = new Image();
-      garmentImg.onload = () => draw();
-      garmentImg.onerror = () => {
-        // no alarm; user can upload garment
-        draw();
-      };
-      garmentImg.src = "shirt.png";
+  scaleEl.addEventListener("input", () => { garment.scale = parseFloat(scaleEl.value); });
+  rotEl.addEventListener("input", () => { garment.rotDeg = parseFloat(rotEl.value); });
+  opacityEl.addEventListener("input", () => { garment.opacity = parseFloat(opacityEl.value); });
+  yEl.addEventListener("input", () => { centerGarment(); });
 
-      draw();
-    })();
-  </script>
+  snapBtn.addEventListener("click", () => {
+    // Take snapshot of current canvas
+    const a = document.createElement("a");
+    a.download = "webar_tryon.png";
+    a.href = canvas.toDataURL("image/png");
+    a.click();
+  });
+
+  // Initial placeholder render
+  draw();
+
+  // Cleanup
+  window.addEventListener("beforeunload", () => stopCamera());
+</script>
 </body>
 </html>
